@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pymysql
+python-multipart
+pypdf
+pdfplumber
+openpyxl
+pdf2image
+reportlab
+cos-python-sdk-v5

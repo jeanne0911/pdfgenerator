@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>表单填写 - PDF表单工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    body { background: #f0f4ff; }
+    .template-card { transition: all 0.25s; cursor: pointer; }
+    .template-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(59,130,246,0.15); }
+    .template-card.selected { border-color: #3b82f6; background: #eff6ff; }
+    .form-input { transition: all 0.2s; }
+    .form-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+    .field-highlight { animation: pulse-border 0.6s ease; }
+    @keyframes pulse-border { 0%,100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); } 50% { box-shadow: 0 0 0 6px rgba(59,130,246,0); } }
+    #pdf-preview-canvas { display: block; }
+    .region-overlay { position: absolute; border: 2px solid #3b82f6; background: rgba(59,130,246,0.08); border-radius: 3px; pointer-events: none; }
+    .region-overlay.filled { border-color: #10b981; background: rgba(16,185,129,0.08); }
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: #f1f1f1; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #93c5fd; border-radius: 2px; }
+    .step-indicator { transition: all 0.3s; }
+    .toast { position: fixed; top: 20px; right: 20px; z-index: 9999; }
+    .loading-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+<!-- Top Nav -->
+<nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm flex-shrink-0">
+  <div class="flex items-center gap-3">
+    <a href="/static/index.html" class="text-gray-400 hover:text-blue-600 transition-colors">
+      <i class="fa-solid fa-arrow-left"></i>
+    </a>
+    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+      <i class="fa-solid fa-pen-to-square text-white text-sm"></i>
+    </div>
+    <span class="font-bold text-gray-800 text-lg">表单填写</span>
+  </div>
+  <a href="/static/admin.html" class="text-gray-300 hover:text-gray-500 transition-colors" title="管理后台">
+    <i class="fa-solid fa-gear text-sm"></i>
+  </a>
+</nav>
+
+<!-- Step Indicator -->
+<div class="bg-white border-b border-gray-100 px-6 py-3 flex-shrink-0">
+  <div class="max-w-5xl mx-auto flex items-center gap-2">
+    <div id="step1-indicator" class="step-indicator flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-600 text-white text-sm font-medium">
+      <span class="w-5 h-5 bg-white text-blue-600 rounded-full flex items-center justify-center text-xs font-bold">1</span>
+      选择模板
+    </div>
+    <div class="flex-1 h-px bg-gray-200 mx-1"></div>
+    <div id="step2-indicator" class="step-indicator flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-gray-500 text-sm font-medium">
+      <span class="w-5 h-5 bg-gray-300 text-white rounded-full flex items-center justify-center text-xs font-bold">2</span>
+      填写内容
+    </div>
+    <div class="flex-1 h-px bg-gray-200 mx-1"></div>
+    <div id="step3-indicator" class="step-indicator flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-gray-500 text-sm font-medium">
+      <span class="w-5 h-5 bg-gray-300 text-white rounded-full flex items-center justify-center text-xs font-bold">3</span>
+      生成下载
+    </div>
+    <div class="ml-4 pl-4 border-l border-gray-200">
+      <button id="btn-open-batch" class="flex items-center gap-2 px-4 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium shadow-sm">
+        <i class="fa-solid fa-table-list"></i> 批量上传
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="flex-1 overflow-hidden flex flex-col">
+
+  <!-- Step 1: Template Selection -->
+  <div id="step1" class="flex-1 overflow-auto p-6">
+    <div class="max-w-5xl mx-auto">
+      <div class="text-center mb-8">
+        <h2 class="text-2xl font-bold text-gray-800 mb-2">选择填写模板</h2>
+        <p class="text-gray-500">请选择需要填写的PDF表单模板</p>
+      </div>
+      <div id="template-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="col-span-full text-center py-16 text-gray-400">
+          <i class="fa-solid fa-spinner fa-spin text-3xl mb-3 block"></i>
+          加载模板中...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Fill Form -->
+  <div id="step2" class="flex-1 overflow-hidden hidden">
+    <div class="h-full flex">
+      <!-- Left: PDF Preview -->
+      <div class="flex-1 bg-gray-100 flex flex-col overflow-hidden">
+        <div class="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 flex-shrink-0">
+          <span class="text-sm text-gray-500">预览：</span>
+          <span id="preview-template-name" class="text-sm font-semibold text-blue-700"></span>
+          <div class="flex-1"></div>
+          <!-- Zoom Controls -->
+          <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 mr-2">
+            <button id="btn-zoom-out-user" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-white text-gray-600 transition-colors" title="缩小">
+              <i class="fa-solid fa-minus text-xs"></i>
+            </button>
+            <span id="zoom-level-user" class="text-xs text-gray-600 min-w-[40px] text-center font-medium">100%</span>
+            <button id="btn-zoom-in-user" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-white text-gray-600 transition-colors" title="放大">
+              <i class="fa-solid fa-plus text-xs"></i>
+            </button>
+            <button id="btn-zoom-fit-user" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-white text-gray-600 transition-colors" title="适应窗口">
+              <i class="fa-solid fa-expand text-xs"></i>
+            </button>
+          </div>
+          <div class="w-px h-5 bg-gray-200"></div>
+          <button id="btn-prev-page-user" class="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">
+            <i class="fa-solid fa-chevron-left text-xs"></i>
+          </button>
+          <span class="text-sm text-gray-600"><span id="user-cur-page">1</span> / <span id="user-total-pages">1</span></span>
+          <button id="btn-next-page-user" class="w-7 h-7 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">
+            <i class="fa-solid fa-chevron-right text-xs"></i>
+          </button>
+          <button id="btn-back-to-step1" class="flex items-center gap-1.5 px-3 py-1.5 text-gray-600 hover:text-gray-800 text-sm transition-colors">
+            <i class="fa-solid fa-arrow-left text-xs"></i> 重新选择
+          </button>
+        </div>
+        <div class="flex-1 overflow-auto flex items-start justify-center p-6" id="user-canvas-container">
+          <div style="position:relative;display:inline-block;" id="user-pdf-wrap">
+            <canvas id="pdf-preview-canvas" class="shadow-xl rounded-lg"></canvas>
+            <div id="region-overlays"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Form -->
+      <div class="w-80 bg-white border-l border-gray-200 flex flex-col overflow-hidden">
+        <div class="p-4 border-b border-gray-100">
+          <h3 class="font-semibold text-gray-800 mb-1">填写内容</h3>
+          <div id="fill-progress-bar" class="w-full bg-gray-100 rounded-full h-1.5 mt-2">
+            <div id="fill-progress" class="bg-blue-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
+          </div>
+          <p id="fill-progress-text" class="text-xs text-gray-400 mt-1">0 / 0 已填写</p>
+        </div>
+        <div id="user-fields-list" class="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
+        </div>
+        <div class="p-4 border-t border-gray-100">
+          <button id="btn-generate-pdf" class="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-blue-200">
+            <i class="fa-solid fa-file-arrow-down"></i> 生成并下载 PDF
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Done -->
+  <div id="step3" class="flex-1 overflow-auto hidden">
+    <div class="max-w-lg mx-auto text-center py-20 px-6">
+      <div class="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+        <i class="fa-solid fa-circle-check text-5xl text-green-500"></i>
+      </div>
+      <h2 class="text-2xl font-bold text-gray-800 mb-3">PDF 生成成功！</h2>
+      <p class="text-gray-500 mb-8">您的PDF文件已生成并开始下载，如未自动下载请点击下方按钮。</p>
+      <div class="flex flex-col gap-3">
+        <button id="btn-download-again" class="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+          <i class="fa-solid fa-download"></i> 重新下载
+        </button>
+        <button id="btn-fill-another" class="w-full py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2">
+          <i class="fa-solid fa-rotate-left"></i> 填写其他模板
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay" class="loading-overlay hidden">
+  <div class="bg-white rounded-2xl p-8 text-center shadow-2xl">
+    <i class="fa-solid fa-spinner fa-spin text-4xl text-blue-500 mb-4 block"></i>
+    <p class="text-gray-700 font-medium" id="loading-text">生成PDF中...</p>
+    <p class="text-gray-400 text-sm mt-1">请稍候</p>
+  </div>
+</div>
+
+<!-- Batch Upload Modal -->
+<div id="batch-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;display:none;align-items:center;justify-content:center;">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-screen overflow-y-auto">
+    <!-- Modal Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center">
+          <i class="fa-solid fa-table-list text-emerald-600 text-lg"></i>
+        </div>
+        <div>
+          <h3 class="text-lg font-bold text-gray-800">批量上传填写</h3>
+          <p class="text-xs text-gray-400">通过Excel模板批量生成PDF</p>
+        </div>
+      </div>
+      <button id="btn-close-batch" class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">
+        <i class="fa-solid fa-xmark text-lg"></i>
+      </button>
+    </div>
+
+    <!-- Unified Batch: Download & Upload -->
+    <div id="batch-content" class="p-6">
+
+      <!-- Step 1: Download Template -->
+      <div class="mb-5">
+        <h4 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+          <span class="w-6 h-6 bg-emerald-600 text-white rounded-full flex items-center justify-center text-xs font-bold">1</span>
+          下载Excel模板
+        </h4>
+        <div class="ml-8">
+          <div class="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-3">
+            <div class="flex items-center gap-3">
+              <i class="fa-solid fa-file-excel text-green-500 text-2xl flex-shrink-0"></i>
+              <div class="flex-1">
+                <div class="flex flex-wrap gap-1.5 mb-2" id="batch-template-tags">
+                  <!-- 模板标签动态生成 -->
+                </div>
+                <button id="btn-download-excel-tpl" class="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">
+                  <i class="fa-solid fa-download"></i> 下载Excel模板
+                </button>
+              </div>
+            </div>
+          </div>
+          <p class="text-xs text-gray-400"><i class="fa-solid fa-circle-info text-blue-400 mr-1"></i>B列选择模板，填写<strong class="text-gray-600">白色</strong>单元格，<strong class="text-gray-500">灰色</strong>单元格留空</p>
+        </div>
+      </div>
+
+      <!-- Step 2: Upload Filled Excel -->
+      <div>
+        <h4 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+          <span class="w-6 h-6 bg-emerald-600 text-white rounded-full flex items-center justify-center text-xs font-bold">2</span>
+          上传并生成PDF
+        </h4>
+        <div class="ml-8">
+          <div id="batch-upload-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-5 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
+            <i class="fa-solid fa-file-arrow-up text-2xl text-gray-300 mb-1"></i>
+            <p class="text-sm text-gray-500">点击或拖拽上传 .xlsx 文件</p>
+          </div>
+
+          <!-- Upload Progress -->
+          <div id="batch-upload-progress" class="hidden mt-4">
+            <div class="flex items-center gap-3 p-3 bg-blue-50 rounded-xl border border-blue-200">
+              <i class="fa-solid fa-spinner fa-spin text-blue-500 text-lg flex-shrink-0"></i>
+              <div class="flex-1">
+                <div class="text-sm font-medium text-blue-700" id="batch-progress-text">正在生成PDF...</div>
+                <div class="w-full bg-blue-100 rounded-full h-1.5 mt-1.5">
+                  <div id="batch-progress-bar" class="bg-blue-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Result -->
+          <div id="batch-result" class="hidden mt-4"></div>
+
+          <div class="flex gap-3 mt-4">
+            <button id="btn-batch-generate" class="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-semibold hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+              <i class="fa-solid fa-gears"></i> 批量生成PDF
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden">
+  <div id="toast-inner" class="px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center gap-2"></div>
+</div>
+
+<footer class="bg-white border-t border-gray-100 py-3 text-center">
+  <p class="text-gray-400 text-sm">由 <a href="https://with.woa.com/" style="color: #8A2BE2;" target="_blank">With</a> 通过自然语言生成</p>
+</footer>
+
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script type="module" src="/static/user.js"></script>
+</body>
+</html>

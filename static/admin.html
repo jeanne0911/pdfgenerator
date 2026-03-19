@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>管理者后台 - PDF表单工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    :root { --primary: #7c3aed; --primary-light: #ede9fe; }
+    body { background: #f5f3ff; }
+    .sidebar { width: 280px; min-width: 280px; }
+    .main-area { flex: 1; min-width: 0; }
+    #pdf-canvas-wrap { position: relative; display: inline-block; cursor: crosshair; user-select: none; }
+    #pdf-canvas { display: block; }
+    #overlay-svg { position: absolute; top: 0; left: 0; pointer-events: none; }
+    #overlay-svg .region-rect,
+    #overlay-svg .region-del,
+    #overlay-svg .resize-handle,
+    #overlay-svg .parsed-import-btn { pointer-events: all; }
+    #draw-layer { position: absolute; top: 0; left: 0; }
+    .region-rect { fill: rgba(124,58,237,0.12); stroke: #7c3aed; stroke-width: 2; stroke-dasharray: 6,3; cursor: pointer; pointer-events: all; }
+    .region-rect:hover { fill: rgba(124,58,237,0.22); }
+    .region-label { font-size: 11px; fill: #5b21b6; font-weight: 600; pointer-events: none; }
+    .region-del { cursor: pointer; pointer-events: all; }
+    .resize-handle { opacity: 0; transition: opacity 0.15s; }
+    .field-region-group:hover .resize-handle { opacity: 1; }
+    .tab-btn { transition: all 0.2s; }
+    .tab-btn.active { background: var(--primary); color: white; }
+    .field-card { transition: all 0.2s; }
+    .field-card:hover { box-shadow: 0 4px 12px rgba(124,58,237,0.15); }
+    .field-card.selected { border-color: #7c3aed; background: #faf5ff; }
+    .field-card[draggable="true"] { cursor: grab; }
+    .field-card[draggable="true"]:active { cursor: grabbing; }
+    .field-card.opacity-40 { opacity: 0.4; }
+    .field-card.scale-95 { transform: scale(0.95); }
+    .field-card.border-t-2 { border-top: 3px solid #7c3aed !important; }
+    .field-card.border-b-2 { border-bottom: 3px solid #7c3aed !important; }
+    .drag-over { border-color: #7c3aed !important; background: #faf5ff !important; }
+    .toast { position: fixed; top: 20px; right: 20px; z-index: 9999; transition: all 0.3s; }
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+    .modal-box { background: white; border-radius: 16px; padding: 28px; width: 480px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+    .page-thumb { cursor: pointer; border: 2px solid transparent; transition: all 0.2s; }
+    .page-thumb.active { border-color: #7c3aed; }
+    .page-thumb:hover { border-color: #a78bfa; }
+    #selection-box { position: absolute; border: 2px dashed #7c3aed; background: rgba(124,58,237,0.08); pointer-events: none; display: none; z-index: 6; }
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: #f1f1f1; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #c4b5fd; border-radius: 2px; }
+    @keyframes shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); } }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+<!-- Admin Login Gate -->
+<div id="admin-login-gate" class="fixed inset-0 z-[9999] bg-gradient-to-br from-purple-50 via-white to-indigo-50 flex items-center justify-center">
+  <div class="w-full max-w-sm mx-4">
+    <div class="text-center mb-8">
+      <div class="w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <i class="fa-solid fa-lock text-2xl text-purple-600"></i>
+      </div>
+      <h2 class="text-xl font-bold text-gray-800">管理后台登录</h2>
+      <p class="text-sm text-gray-400 mt-1">请输入管理密码以继续</p>
+    </div>
+    <div class="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1.5">管理密码</label>
+        <div class="relative">
+          <input id="admin-password-input" type="password" placeholder="请输入管理密码" 
+            class="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent pr-10"
+          />
+          <button id="toggle-password-visibility" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <i class="fa-solid fa-eye text-sm"></i>
+          </button>
+        </div>
+        <p id="login-error-msg" class="text-xs text-red-500 mt-1.5 hidden">密码错误，请重试</p>
+      </div>
+      <button id="btn-admin-login" class="w-full py-3 bg-purple-600 text-white rounded-xl font-semibold hover:bg-purple-700 transition-colors flex items-center justify-center gap-2 shadow-md shadow-purple-200">
+        <i class="fa-solid fa-right-to-bracket"></i> 进入管理后台
+      </button>
+    </div>
+    <div class="text-center mt-4">
+      <a href="/static/index.html" class="text-sm text-gray-400 hover:text-purple-600 transition-colors">
+        <i class="fa-solid fa-arrow-left mr-1"></i> 返回首页
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Top Nav -->
+<nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm flex-shrink-0">
+  <div class="flex items-center gap-3">
+    <a href="/static/index.html" class="text-gray-400 hover:text-purple-600 transition-colors">
+      <i class="fa-solid fa-arrow-left"></i>
+    </a>
+    <div class="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center">
+      <i class="fa-solid fa-gear text-white text-sm"></i>
+    </div>
+    <span class="font-bold text-gray-800 text-lg">管理者后台</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <button id="btn-field-mgr" class="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 transition-colors text-sm font-medium">
+      <i class="fa-solid fa-list-check"></i> 字段管理
+    </button>
+    <button id="btn-storage-status" class="flex items-center gap-2 px-4 py-2 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100 transition-colors text-sm font-medium" title="查看COS存储状态">
+      <i class="fa-solid fa-cloud"></i> COS存储
+    </button>
+    <a href="/static/user.html" class="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-sm font-medium">
+      <i class="fa-solid fa-eye"></i> 用户视图
+    </a>
+    <a href="/static/user.html#batch" id="btn-admin-batch" class="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-medium">
+      <i class="fa-solid fa-table-list"></i> 批量上传
+    </a>
+  </div>
+</nav>
+
+<!-- Main Layout -->
+<div class="flex flex-1 overflow-hidden">
+
+  <!-- Sidebar: Template List -->
+  <aside class="sidebar bg-white border-r border-gray-200 flex flex-col overflow-hidden">
+    <div class="p-4 border-b border-gray-100">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-gray-700 text-sm">PDF 模板列表</h3>
+        <button id="btn-new-template" class="w-7 h-7 bg-purple-600 text-white rounded-lg flex items-center justify-center hover:bg-purple-700 transition-colors">
+          <i class="fa-solid fa-plus text-xs"></i>
+        </button>
+      </div>
+      <div id="upload-zone" class="border-2 border-dashed border-purple-200 rounded-xl p-4 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50 transition-all">
+        <i class="fa-solid fa-cloud-arrow-up text-2xl text-purple-300 mb-2"></i>
+        <p class="text-xs text-gray-500">拖拽或点击上传PDF</p>
+        <input type="file" id="pdf-upload-input" accept=".pdf" class="hidden" />
+      </div>
+      <!-- 从COS导入已有模板 -->
+      <button id="btn-import-from-cos" class="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 bg-orange-50 text-orange-600 border border-orange-200 rounded-xl hover:bg-orange-100 transition-colors text-xs font-medium">
+        <i class="fa-solid fa-cloud-arrow-down"></i> 从COS导入已有模板
+      </button>
+    </div>
+    <div id="template-list" class="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-2">
+      <div class="text-center text-gray-400 text-sm py-8">
+        <i class="fa-solid fa-folder-open text-3xl mb-2 block"></i>
+        暂无模板
+      </div>
+    </div>
+  </aside>
+
+  <!-- Center: PDF Preview + Draw -->
+  <div class="main-area flex flex-col overflow-hidden bg-gray-100">
+    <!-- Toolbar -->
+    <div id="editor-toolbar" class="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 flex-shrink-0 hidden">
+      <span class="text-sm font-medium text-gray-600">当前模板：</span>
+      <span id="current-template-name" class="text-sm font-semibold text-purple-700"></span>
+      <div class="flex-1"></div>
+      <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
+        <button id="btn-draw-mode" class="tab-btn active px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5">
+          <i class="fa-solid fa-vector-square"></i> 框选模式
+        </button>
+        <button id="btn-view-mode" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5 text-gray-600">
+          <i class="fa-solid fa-hand"></i> 查看模式
+        </button>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btn-prev-page" class="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">
+          <i class="fa-solid fa-chevron-left text-xs"></i>
+        </button>
+        <span class="text-sm text-gray-600"><span id="cur-page">1</span> / <span id="total-pages">1</span></span>
+        <button id="btn-next-page" class="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors">
+          <i class="fa-solid fa-chevron-right text-xs"></i>
+        </button>
+      </div>
+      <!-- Zoom Controls -->
+      <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+        <button id="btn-zoom-out-admin" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-white text-gray-600 transition-colors" title="缩小">
+          <i class="fa-solid fa-minus text-xs"></i>
+        </button>
+        <span id="zoom-level-admin" class="text-xs text-gray-600 min-w-[40px] text-center font-medium">100%</span>
+        <button id="btn-zoom-in-admin" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-white text-gray-600 transition-colors" title="放大">
+          <i class="fa-solid fa-plus text-xs"></i>
+        </button>
+        <button id="btn-zoom-fit-admin" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-white text-gray-600 transition-colors" title="适应窗口">
+          <i class="fa-solid fa-expand text-xs"></i>
+        </button>
+      </div>
+      <button id="btn-save-fields" class="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium">
+        <i class="fa-solid fa-floppy-disk"></i> 保存模板
+      </button>
+    </div>
+
+    <!-- Parse Status Banner -->
+    <div id="parse-status-banner" class="hidden mx-4 mt-3 flex-shrink-0"></div>
+
+    <!-- PDF Canvas Area -->
+    <div class="flex-1 overflow-auto flex items-start justify-center p-6" id="canvas-container">
+      <div id="empty-state" class="flex flex-col items-center justify-center h-full text-gray-400">
+        <i class="fa-solid fa-file-pdf text-6xl mb-4 text-gray-300"></i>
+        <p class="text-lg font-medium">请从左侧选择或上传PDF模板</p>
+        <p class="text-sm mt-2">选择模板后可在此处框选填写区域</p>
+      </div>
+      <div id="pdf-canvas-wrap" class="hidden shadow-2xl rounded-lg overflow-hidden">
+        <canvas id="pdf-canvas"></canvas>
+        <div id="selection-box"></div>
+        <canvas id="draw-layer" style="position:absolute;top:0;left:0;pointer-events:all;z-index:5;"></canvas>
+        <svg id="overlay-svg" style="z-index:10;"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Panel: Fields -->
+  <aside class="w-72 bg-white border-l border-gray-200 flex flex-col overflow-hidden" id="right-panel">
+    <div class="p-4 border-b border-gray-100">
+      <div class="flex items-center justify-between mb-1">
+        <h3 class="font-semibold text-gray-700 text-sm">填写字段</h3>
+        <button id="btn-reparse" class="hidden text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium" title="重新解析PDF表单字段">
+          <i class="fa-solid fa-rotate-right"></i> 重新解析
+        </button>
+      </div>
+      <p class="text-xs text-gray-400">上传PDF后自动识别表单字段，可手动框选区域。<br/>拖拽字段卡片可调整排序，排序影响Excel模板中的列顺序。</p>
+    </div>
+    <div id="fields-list" class="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-2">
+      <div id="fields-empty" class="text-center text-gray-400 text-sm py-8">
+        <i class="fa-solid fa-draw-polygon text-3xl mb-2 block text-gray-300"></i>
+        在PDF上框选区域<br/>添加填写字段
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Upload Modal -->
+<div id="upload-modal" class="modal-bg hidden">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold text-gray-800 mb-4">上传新模板</h3>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">模板名称 <span class="text-red-500">*</span></label>
+        <input id="new-template-name" type="text" placeholder="例如：请假申请表" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">模板描述</label>
+        <textarea id="new-template-desc" placeholder="简要描述此模板的用途..." rows="2" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">PDF文件 <span class="text-red-500">*</span></label>
+        <div id="modal-upload-zone" class="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50 transition-all">
+          <i class="fa-solid fa-file-pdf text-3xl text-gray-300 mb-2"></i>
+          <p class="text-sm text-gray-500" id="modal-file-name">点击选择PDF文件</p>
+          <input type="file" id="modal-pdf-input" accept=".pdf" class="hidden" />
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-3 mt-6">
+      <button id="btn-cancel-upload" class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium">取消</button>
+      <button id="btn-confirm-upload" class="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium">
+        <i class="fa-solid fa-upload mr-1"></i> 上传模板
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Field Config Modal -->
+<div id="field-modal" class="modal-bg hidden">
+  <div class="modal-box">
+    <h3 class="text-lg font-bold text-gray-800 mb-4">
+      <i class="fa-solid fa-vector-square text-purple-600 mr-2"></i>配置填写字段
+    </h3>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">选择字段定义</label>
+        <select id="field-def-select" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
+          <option value="">-- 选择已有字段 --</option>
+        </select>
+        <p class="text-xs text-gray-400 mt-1">选择统一字段定义，确保多模板字段名一致</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <div class="flex-1 h-px bg-gray-200"></div>
+        <span class="text-xs text-gray-400">或自定义</span>
+        <div class="flex-1 h-px bg-gray-200"></div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">自定义标签</label>
+        <input id="field-custom-label" type="text" placeholder="留空则使用字段定义的标签" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">字体大小</label>
+          <input id="field-font-size" type="number" value="12" min="8" max="24" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">所在页码</label>
+          <input id="field-page-num" type="number" value="1" min="1" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" readonly />
+        </div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-3 text-xs text-gray-500">
+        <div class="grid grid-cols-2 gap-2">
+          <span>X: <strong id="field-x-display">0</strong></span>
+          <span>Y: <strong id="field-y-display">0</strong></span>
+          <span>宽: <strong id="field-w-display">0</strong></span>
+          <span>高: <strong id="field-h-display">0</strong></span>
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-3 mt-6">
+      <button id="btn-cancel-field" class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium">取消</button>
+      <button id="btn-confirm-field" class="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium">
+        <i class="fa-solid fa-plus mr-1"></i> 添加字段
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Field Manager Modal -->
+<div id="field-mgr-modal" class="modal-bg hidden">
+  <div class="modal-box" style="width:640px;">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-bold text-gray-800"><i class="fa-solid fa-list-check text-purple-600 mr-2"></i>字段定义管理</h3>
+      <button id="btn-close-field-mgr" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+    </div>
+    <p class="text-sm text-gray-500 mb-4">统一管理所有模板共用的字段名称，确保不同模板间字段名称一致。点击字段可进行编辑。</p>
+    <!-- 新增字段表单 -->
+    <div class="bg-purple-50 border border-purple-200 rounded-xl p-3 mb-4">
+      <div class="text-xs font-semibold text-purple-700 mb-2 flex items-center gap-1"><i class="fa-solid fa-plus-circle"></i> 新增字段定义</div>
+      <div class="flex gap-2">
+        <input id="new-field-name" type="text" placeholder="字段标识（英文，如 applicant_name）" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
+        <input id="new-field-label" type="text" placeholder="显示名称（如 申请人姓名）" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white" />
+        <select id="new-field-type" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white">
+          <option value="text">文本</option>
+          <option value="textarea">多行</option>
+          <option value="date">日期</option>
+          <option value="number">数字</option>
+          <option value="checkbox">复选</option>
+        </select>
+        <button id="btn-add-field-def" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium whitespace-nowrap">
+          <i class="fa-solid fa-plus mr-1"></i>添加
+        </button>
+      </div>
+    </div>
+    <!-- 字段列表 -->
+    <div class="text-xs font-semibold text-gray-500 mb-2 flex items-center justify-between">
+      <span>已有字段定义</span>
+      <span id="field-def-count" class="text-purple-600">0 个</span>
+    </div>
+    <div id="field-def-list" class="space-y-2 max-h-96 overflow-y-auto scrollbar-thin">
+      <div class="text-center text-gray-400 text-sm py-4">加载中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Storage Status Modal -->
+<div id="storage-modal" class="modal-bg hidden">
+  <div class="modal-box" style="width:520px;">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-bold text-gray-800"><i class="fa-solid fa-cloud text-orange-500 mr-2"></i>COS 存储状态</h3>
+      <button id="btn-close-storage" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+    </div>
+    <div id="storage-status-content" class="space-y-4">
+      <div class="text-center py-6 text-gray-400">
+        <i class="fa-solid fa-spinner fa-spin text-2xl mb-2 block"></i>
+        加载中...
+      </div>
+    </div>
+    <div class="mt-4 flex gap-3">
+      <button id="btn-trigger-migrate" class="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm font-medium flex items-center justify-center gap-2">
+        <i class="fa-solid fa-cloud-arrow-up"></i> 迁移数据库中的PDF到COS
+      </button>
+      <button id="btn-refresh-storage" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium">
+        <i class="fa-solid fa-rotate-right"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden">
+  <div id="toast-inner" class="px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center gap-2"></div>
+</div>
+
+<footer class="bg-white border-t border-gray-100 py-2 text-center flex-shrink-0">
+  <p class="text-gray-400 text-sm">由 <a href="https://with.woa.com/" style="color: #8A2BE2;" target="_blank">With</a> 通过自然语言生成</p>
+</footer>
+
+<script type="module" src="/static/admin.js"></script>
+</body>
+</html>
