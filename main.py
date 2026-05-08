@@ -1767,15 +1767,33 @@ def _get_cjk_font_path() -> str:
     
     # 尝试本地字体（包含繁体的CJK字体优先）
     local_font_paths = [
+        # Linux系统字体
         '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf',
         '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf',
         '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/opentype/noto-cjk/NotoSansCJK-Regular.ttc',
+        # 备选中文字体
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        # macOS系统字体
         '/System/Library/Fonts/PingFang.ttc',
+        '/System/Library/Fonts/STHeiti Light.ttc',
+        '/Library/Fonts/Arial Unicode.ttf',
     ]
     for fp in local_font_paths:
         if os.path.exists(fp):
-            _cached_cjk_font_path = fp
-            return fp
+            # 验证字体文件大小
+            try:
+                if os.path.getsize(fp) > 100000:  # 至少100KB
+                    _cached_cjk_font_path = fp
+                    print(f"找到本地中文字体: {fp} ({os.path.getsize(fp)} bytes)")
+                    return fp
+            except:
+                continue
     
     # 本地无字体，从CDN下载
     downloaded = _download_cjk_font()
@@ -1825,6 +1843,30 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
         except Exception as e:
             print(f"获取CJK字体路径异常: {e}")
 
+        # 构建字段值映射（支持带编号的标签和普通标签）
+        # 将 row_data 中的键标准化：去掉 " #N" 后缀用于匹配
+        field_label_counts = {}
+        for field in fields:
+            lbl = field.get('custom_label') or field.get('field_label') or field.get('field_name') or ''
+            field_label_counts[lbl] = field_label_counts.get(lbl, 0) + 1
+
+        field_label_seen = {}
+        field_value_map = {}
+        for field in fields:
+            lbl = field.get('custom_label') or field.get('field_label') or field.get('field_name') or ''
+            if field_label_counts[lbl] > 1:
+                field_label_seen[lbl] = field_label_seen.get(lbl, 0) + 1
+                display_lbl = f"{lbl} #{field_label_seen[lbl]}"
+            else:
+                display_lbl = lbl
+            # 优先精确匹配，否则尝试去掉编号后匹配
+            if display_lbl in row_data:
+                field_value_map[display_lbl] = row_data[display_lbl]
+            elif lbl in row_data:
+                field_value_map[display_lbl] = row_data[lbl]
+            else:
+                field_value_map[display_lbl] = ''
+
         # 按页分组字段
         pages_fields = {}
         for field in fields:
@@ -1833,6 +1875,16 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
             if page_num not in pages_fields:
                 pages_fields[page_num] = []
             pages_fields[page_num].append((label, field))
+
+        # 为每个字段分配索引（用于处理重复字段的编号）
+        field_indices = {}
+        field_index_counts = {}
+        for idx, field in enumerate(fields):
+            lbl_raw = field.get('custom_label') or field.get('field_label') or field.get('field_name') or ''
+            if lbl_raw not in field_index_counts:
+                field_index_counts[lbl_raw] = 0
+            field_index_counts[lbl_raw] += 1
+            field_indices[idx] = field_index_counts[lbl_raw]
 
         for page_idx in range(len(reader.pages)):
             page_num = page_idx + 1
@@ -1844,18 +1896,26 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
             overlay_buffer = io.BytesIO()
             c = rl_canvas.Canvas(overlay_buffer, pagesize=(page_width, page_height))
 
-            # 设置字体
-            try:
-                if font_registered:
-                    c.setFont(cjk_font_name, 12)
-                else:
-                    c.setFont('Helvetica', 12)
-            except:
-                c.setFont('Helvetica', 12)
-
             if page_num in pages_fields:
-                for label, field in pages_fields[page_num]:
-                    value = row_data.get(label, '')
+                for label, field in fields:
+                    # 获取field在fields列表中的索引
+                    try:
+                        field_global_idx = fields.index(field)
+                    except ValueError:
+                        continue
+                    
+                    # 获取display_lbl编号
+                    lbl_raw = field.get('custom_label') or field.get('field_label') or field.get('field_name') or ''
+                    total_count = field_label_counts.get(lbl_raw, 0)
+                    field_seq_num = field_indices.get(field_global_idx, 1)
+                    
+                    if total_count > 1:
+                        display_lbl = f"{lbl_raw} #{field_seq_num}"
+                    else:
+                        display_lbl = lbl_raw
+                    
+                    # 从field_value_map获取值
+                    value = field_value_map.get(display_lbl, '')
                     if not value:
                         continue
 
@@ -1872,18 +1932,60 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                     else:
                         display_val = str(value)
 
-                    # 设置字体大小
+                    # 设置字体 - 关键修复：确保中文文字正确显示
+                    # 尝试使用CJK字体，如果失败则使用内置字体
+                    current_font = cjk_font_name if font_registered else 'Helvetica'
+                    font_set_success = False
+                    
                     try:
-                        if font_registered:
-                            c.setFont(cjk_font_name, font_size)
-                        else:
+                        c.setFont(current_font, font_size)
+                        font_set_success = True
+                    except Exception as font_err:
+                        # CJK字体注册失败，尝试使用内置中文字体
+                        try:
+                            # reportlab内置的CID字体，支持中文
                             c.setFont('Helvetica', font_size)
-                    except:
-                        c.setFont('Helvetica', font_size)
+                            current_font = 'Helvetica'
+                            font_set_success = True
+                        except:
+                            try:
+                                c.setFont('Courier', font_size)
+                                current_font = 'Courier'
+                                font_set_success = True
+                            except:
+                                pass
+                    
+                    if not font_set_success:
+                        print(f"警告：无法设置字体，文字可能无法正确显示: {display_val}")
+                        continue
 
                     c.setFillColorRGB(0, 0, 0)
-                    text_y = y + (h - font_size) / 2 + 2
-                    c.drawString(x + 2, text_y, display_val)
+                    
+                    # PDF坐标系转换：PDF的y是从左下角开始，而reportlab也是从左下角
+                    # 但字段的y通常是从页面顶部算的（PDF预览的坐标系）
+                    # 需要转换为reportlab坐标系：y_from_bottom = page_height - y - height
+                    text_y_reportlab = page_height - y - h
+                    
+                    # 垂直居中：再偏移半个字体高度
+                    text_y = text_y_reportlab + (h - font_size) / 2 + 2
+                    
+                    # 确保文字在页面范围内
+                    if text_y < 0:
+                        text_y = 5
+                    if x < 0:
+                        x = 2
+                    
+                    try:
+                        c.drawString(x + 2, text_y, display_val)
+                    except Exception as draw_err:
+                        print(f"绘制文字失败: {display_val}, 错误: {draw_err}")
+                        # 尝试用更安全的方式绘制
+                        try:
+                            # 限制文字长度避免溢出
+                            safe_text = str(display_val)[:200]
+                            c.drawString(x + 2, text_y, safe_text)
+                        except Exception as safe_err:
+                            print(f"安全绘制也失败: {safe_err}")
 
             c.save()
             overlay_buffer.seek(0)

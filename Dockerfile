@@ -1,4 +1,14 @@
 FROM python:3.11-slim
+
+# 安装中文字体支持（解决批量上传PDF中文显示空白/黑框问题）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-cjk \
+    fonts-wqy-microhei \
+    fontconfig \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -f -v
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
