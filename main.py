@@ -2029,7 +2029,7 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
             c = rl_canvas.Canvas(overlay_buffer, pagesize=(page_width, page_height))
 
             if page_num in pages_fields:
-                for label, field in fields:
+                for label, field in pages_fields[page_num]:
                     # 获取field在fields列表中的索引
                     try:
                         field_global_idx = fields.index(field)
