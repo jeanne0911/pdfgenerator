@@ -2066,13 +2066,10 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                     else:
                         display_val = str(value)
 
-                    # PDF坐标系转换：PDF的y是从左下角开始，而reportlab也是从左下角
-                    # 但字段的y通常是从页面顶部算的（PDF预览的坐标系）
-                    # 需要转换为reportlab坐标系：y_from_bottom = page_height - y - height
-                    text_y_reportlab = page_height - y - h
-                    
-                    # 垂直居中：再偏移半个字体高度
-                    text_y = text_y_reportlab + (h - font_size) / 2 + 2
+                    # 前端 screenToPdf 已经将坐标转为 PDF 坐标系（原点左下角）
+                    # reportlab 也是左下角坐标系，所以直接使用 y 即可
+                    # 垂直居中：在框内偏移使文字居中
+                    text_y = y + (h - font_size) / 2 + 2
                     
                     # 确保文字在页面范围内
                     if text_y < 0:
