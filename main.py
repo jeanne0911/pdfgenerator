@@ -6,6 +6,7 @@ import json
 import struct
 import re
 import zipfile
+import unicodedata
 from typing import List, Optional, Dict, Any
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -758,6 +759,90 @@ def save_template_fields(tid: int, body: TemplateSaveFields):
     finally:
         db.close()
 
+# ==================== Field Sorting Helpers ====================
+
+# 简易拼音首字母表（覆盖GB2312常用汉字区间）
+_PINYIN_TABLE = [
+    ('\u0041', 0xB0A1), ('\u0042', 0xB0C5), ('\u0043', 0xB2C1), ('\u0044', 0xB4EE),
+    ('\u0045', 0xB6EA), ('\u0046', 0xB7A2), ('\u0047', 0xB8C1), ('\u0048', 0xB9FE),
+    ('\u004A', 0xBBF7), ('\u004B', 0xBFA6), ('\u004C', 0xC0AC), ('\u004D', 0xC2E8),
+    ('\u004E', 0xC4C3), ('\u004F', 0xC5B6), ('\u0050', 0xC5BE), ('\u0051', 0xC6DA),
+    ('\u0052', 0xC8BB), ('\u0053', 0xC8F6), ('\u0054', 0xCBFA), ('\u0057', 0xCDDA),
+    ('\u0058', 0xCEF4), ('\u0059', 0xD1B9), ('\u005A', 0xD4D1),
+]
+
+def _char_pinyin_key(ch):
+    """返回单个字符的拼音排序键：中文返回拼音首字母，其他字符返回小写形式"""
+    if '\u4e00' <= ch <= '\u9fff':
+        try:
+            gb_bytes = ch.encode('gb2312')
+            code = gb_bytes[0] * 256 + gb_bytes[1]
+            for i in range(len(_PINYIN_TABLE) - 1, -1, -1):
+                if code >= _PINYIN_TABLE[i][1]:
+                    return _PINYIN_TABLE[i][0].lower()
+            return 'a'
+        except (UnicodeEncodeError, IndexError):
+            return ch.lower()
+    return ch.lower()
+
+def _pinyin_sort_key(text):
+    """生成文本的拼音排序键"""
+    return ''.join(_char_pinyin_key(ch) for ch in text)
+
+def _sort_fields_for_excel(fields, field_labels):
+    """
+    智能排序字段用于Excel模板显示：
+    1. 有编号的字段（同名出现多次，标签带 #N）按组分在一起
+    2. 没有编号的字段按拼音排序
+    3. 有编号的组，按组内第一个字段的拼音位置插入
+    
+    返回排序后的 (fields, field_labels) 元组
+    """
+    if not fields:
+        return fields, field_labels
+    
+    # 分析哪些是有编号的、哪些是没编号的
+    grouped = {}   # base_label -> [(index, field, label)]
+    ungrouped = [] # [(index, field, label)]
+    
+    for i, (field, label) in enumerate(zip(fields, field_labels)):
+        match = re.match(r'^(.+?)\s*#\d+$', label)
+        if match:
+            base = match.group(1).strip()
+            if base not in grouped:
+                grouped[base] = []
+            grouped[base].append((i, field, label))
+        else:
+            ungrouped.append((i, field, label))
+    
+    # 构建排序项：每个 ungrouped 字段是一个排序项，每个 group 也是一个排序项
+    sort_items = []
+    
+    for item in ungrouped:
+        sort_items.append({
+            'key': _pinyin_sort_key(item[2]),
+            'entries': [item]
+        })
+    
+    for base, items in grouped.items():
+        sort_items.append({
+            'key': _pinyin_sort_key(base),
+            'entries': sorted(items, key=lambda x: x[2])  # 组内按编号排
+        })
+    
+    # 按拼音排序
+    sort_items.sort(key=lambda x: x['key'])
+    
+    # 展开结果
+    sorted_fields = []
+    sorted_labels = []
+    for item in sort_items:
+        for _, field, label in item['entries']:
+            sorted_fields.append(field)
+            sorted_labels.append(label)
+    
+    return sorted_fields, sorted_labels
+
 # ==================== Excel Batch API ====================
 
 @app.get("/api/templates/{tid}/excel-template")
@@ -804,6 +889,9 @@ def download_excel_template(tid: int):
         else:
             display_label = label
         field_labels.append(display_label)
+
+    # 智能排序：有编号的分组显示，没编号的按拼音排序
+    fields, field_labels = _sort_fields_for_excel(fields, field_labels)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1092,6 +1180,12 @@ def download_unified_excel_template():
 
     if not unified_fields:
         raise HTTPException(status_code=400, detail="没有可用的字段")
+
+    # 智能排序统一字段：有编号的分组显示，没编号的按拼音排序
+    unified_labels = [uf['label'] for uf in unified_fields]
+    unified_fields, unified_labels = _sort_fields_for_excel(unified_fields, unified_labels)
+    # 更新 seen_labels 索引（排序后位置变了）
+    seen_labels = {uf['label']: i for i, uf in enumerate(unified_fields)}
 
     # ==================== 生成Excel ====================
     wb = openpyxl.Workbook()
