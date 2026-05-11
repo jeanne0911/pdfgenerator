@@ -1867,20 +1867,22 @@ def _get_cjk_font_path() -> str:
         else:
             _cached_cjk_font_path = None
     
-    # 尝试本地字体（包含繁体的CJK字体优先）
+    # 尝试本地字体（TTF/OTF 单体优先，TTC 放后面因为 reportlab 不一定支持）
     local_font_paths = [
-        # Linux系统字体
-        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        # TTF 单体字体（reportlab 完美支持）
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttf',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttf',
+        '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
         '/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf',
-        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf',
         '/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf',
+        # TTC 集合字体（reportlab 可能不支持 PostScript outlines）
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
         '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
         '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
         '/usr/share/fonts/opentype/noto-cjk/NotoSansCJK-Regular.ttc',
-        # 备选中文字体
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
         # macOS系统字体
         '/System/Library/Fonts/PingFang.ttc',
         '/System/Library/Fonts/STHeiti Light.ttc',
