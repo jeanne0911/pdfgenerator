@@ -792,54 +792,62 @@ def _pinyin_sort_key(text):
 def _sort_fields_for_excel(fields, field_labels):
     """
     智能排序字段用于Excel模板显示：
-    1. 有编号的字段（同名出现多次，标签带 #N）按组分在一起
-    2. 没有编号的字段按拼音排序
-    3. 有编号的组，按组内第一个字段的拼音位置插入
+    1. 固定字段置顶：保单持有人姓名 排第一，保单持有人证件号码 排第二
+    2. 按编号分组：所有 #1 的放一起，所有 #2 的放一起，依此类推
+    3. 每组内按拼音排序
+    4. 没有编号的字段排在最后，按拼音排序
     
     返回排序后的 (fields, field_labels) 元组
     """
     if not fields:
         return fields, field_labels
     
-    # 分析哪些是有编号的、哪些是没编号的
-    grouped = {}   # base_label -> [(index, field, label)]
-    ungrouped = [] # [(index, field, label)]
+    # 固定置顶字段（按顺序）
+    PIN_TOP = ['保单持有人姓名', '保单持有人证件号码']
+    
+    pinned = []       # 置顶字段
+    numbered = {}     # 编号 -> [(index, field, label, base_label)]
+    unnumbered = []   # 无编号字段
     
     for i, (field, label) in enumerate(zip(fields, field_labels)):
-        match = re.match(r'^(.+?)\s*#\d+$', label)
-        if match:
-            base = match.group(1).strip()
-            if base not in grouped:
-                grouped[base] = []
-            grouped[base].append((i, field, label))
+        # 提取基础标签（去掉 #N 后缀）
+        match = re.match(r'^(.+?)\s*#(\d+)$', label)
+        base_label = match.group(1).strip() if match else label
+        
+        # 检查是否是置顶字段
+        if base_label in PIN_TOP:
+            pinned.append((i, field, label, base_label))
+        elif match:
+            num = int(match.group(2))
+            if num not in numbered:
+                numbered[num] = []
+            numbered[num].append((i, field, label, base_label))
         else:
-            ungrouped.append((i, field, label))
+            unnumbered.append((i, field, label))
     
-    # 构建排序项：每个 ungrouped 字段是一个排序项，每个 group 也是一个排序项
-    sort_items = []
-    
-    for item in ungrouped:
-        sort_items.append({
-            'key': _pinyin_sort_key(item[2]),
-            'entries': [item]
-        })
-    
-    for base, items in grouped.items():
-        sort_items.append({
-            'key': _pinyin_sort_key(base),
-            'entries': sorted(items, key=lambda x: x[2])  # 组内按编号排
-        })
-    
-    # 按拼音排序
-    sort_items.sort(key=lambda x: x['key'])
-    
-    # 展开结果
+    # 组装结果
     sorted_fields = []
     sorted_labels = []
-    for item in sort_items:
-        for _, field, label in item['entries']:
+    
+    # 1. 置顶字段按预定义顺序
+    pinned.sort(key=lambda x: PIN_TOP.index(x[3]) if x[3] in PIN_TOP else 999)
+    for _, field, label, _ in pinned:
+        sorted_fields.append(field)
+        sorted_labels.append(label)
+    
+    # 2. 按编号分组：#1 组、#2 组...，每组内按拼音排序
+    for num in sorted(numbered.keys()):
+        group = numbered[num]
+        group.sort(key=lambda x: _pinyin_sort_key(x[3]))  # 按基础标签拼音排
+        for _, field, label, _ in group:
             sorted_fields.append(field)
             sorted_labels.append(label)
+    
+    # 3. 无编号字段按拼音排序
+    unnumbered.sort(key=lambda x: _pinyin_sort_key(x[2]))
+    for _, field, label in unnumbered:
+        sorted_fields.append(field)
+        sorted_labels.append(label)
     
     return sorted_fields, sorted_labels
 
