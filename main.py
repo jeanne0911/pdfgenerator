@@ -1804,6 +1804,36 @@ def _get_cjk_font_path() -> str:
     return None
 
 
+def _has_cjk(text):
+    """检测文本是否包含CJK字符"""
+    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f]', text))
+
+
+def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
+    """混合渲染：CJK字符用CJK字体，ASCII字符用Helvetica
+    
+    解决CJK字体中数字/字母显示过宽的问题（全角宽度）
+    """
+    cursor_x = x
+    # 按连续的CJK / 非CJK字符分段
+    segments = re.findall(
+        r'([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f]+|'
+        r'[^\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f]+)',
+        text
+    )
+    
+    for seg in segments:
+        if _has_cjk(seg) and font_registered:
+            c.setFont(cjk_font_name, font_size)
+        else:
+            c.setFont('Helvetica', font_size)
+        
+        c.drawString(cursor_x, y, seg)
+        # 计算当前段宽度，移动光标
+        seg_width = c.stringWidth(seg, c._fontname, font_size)
+        cursor_x += seg_width
+
+
 def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes:
     """将数据填入PDF并返回填写后的PDF字节"""
     try:
@@ -1932,35 +1962,6 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                     else:
                         display_val = str(value)
 
-                    # 设置字体 - 关键修复：确保中文文字正确显示
-                    # 尝试使用CJK字体，如果失败则使用内置字体
-                    current_font = cjk_font_name if font_registered else 'Helvetica'
-                    font_set_success = False
-                    
-                    try:
-                        c.setFont(current_font, font_size)
-                        font_set_success = True
-                    except Exception as font_err:
-                        # CJK字体注册失败，尝试使用内置中文字体
-                        try:
-                            # reportlab内置的CID字体，支持中文
-                            c.setFont('Helvetica', font_size)
-                            current_font = 'Helvetica'
-                            font_set_success = True
-                        except:
-                            try:
-                                c.setFont('Courier', font_size)
-                                current_font = 'Courier'
-                                font_set_success = True
-                            except:
-                                pass
-                    
-                    if not font_set_success:
-                        print(f"警告：无法设置字体，文字可能无法正确显示: {display_val}")
-                        continue
-
-                    c.setFillColorRGB(0, 0, 0)
-                    
                     # PDF坐标系转换：PDF的y是从左下角开始，而reportlab也是从左下角
                     # 但字段的y通常是从页面顶部算的（PDF预览的坐标系）
                     # 需要转换为reportlab坐标系：y_from_bottom = page_height - y - height
@@ -1974,14 +1975,21 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                         text_y = 5
                     if x < 0:
                         x = 2
+
+                    # 设置填充色为黑色，禁用描边防止黑框
+                    c.setFillColorRGB(0, 0, 0)
+                    c.setStrokeColorRGB(1, 1, 1)
+                    c.setLineWidth(0)
                     
                     try:
-                        c.drawString(x + 2, text_y, display_val)
+                        # 使用混合渲染：CJK字符用CJK字体，ASCII字符用Helvetica
+                        # 解决CJK字体中数字/字母显示过宽的问题
+                        _draw_mixed_text(c, x + 2, text_y, display_val, cjk_font_name, font_size, font_registered)
                     except Exception as draw_err:
                         print(f"绘制文字失败: {display_val}, 错误: {draw_err}")
-                        # 尝试用更安全的方式绘制
+                        # 降级：直接用Helvetica绘制
                         try:
-                            # 限制文字长度避免溢出
+                            c.setFont('Helvetica', font_size)
                             safe_text = str(display_val)[:200]
                             c.drawString(x + 2, text_y, safe_text)
                         except Exception as safe_err:
