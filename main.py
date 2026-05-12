@@ -1909,8 +1909,19 @@ def _get_cjk_font_path() -> str:
 
 
 def _has_cjk(text):
-    """检测文本是否包含CJK字符"""
-    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f]', text))
+    """检测文本是否包含CJK字符或全角标点符号
+    
+    覆盖范围：
+    - 4E00-9FFF: CJK统一汉字
+    - 3400-4DBF: CJK扩展A
+    - F900-FAFF: CJK兼容汉字
+    - 2E80-2EFF: CJK部首补充
+    - 3000-303F: CJK标点（。、「」等）
+    - FE30-FE4F: CJK兼容形式（︐︑等）
+    - FF00-FFEF: 全角字符（，：；！？（）等全角标点和全角字母数字）
+    - 2000-206F: 通用标点（…—等）
+    """
+    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f\uff00-\uffef\u2000-\u206f]', text))
 
 
 def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
@@ -1927,9 +1938,10 @@ def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
     
     cursor_x = x
     # 按连续的CJK / 非CJK字符分段
+    # 包含全角标点(FF00-FFEF)和通用标点(2000-206F)，防止这些字符被分到Helvetica导致黑框
     segments = re.findall(
-        r'([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f]+|'
-        r'[^\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f]+)',
+        r'([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f\uff00-\uffef\u2000-\u206f]+|'
+        r'[^\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f\uff00-\uffef\u2000-\u206f]+)',
         text
     )
     
@@ -2091,10 +2103,8 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                     if x < 0:
                         x = 2
 
-                    # 设置填充色为黑色
+                    # 设置填充色为黑色（不设置描边，全靠textRenderMode(0)控制）
                     c.setFillColorRGB(0, 0, 0)
-                    c.setStrokeColorRGB(0, 0, 0)
-                    c.setLineWidth(0)
                     
                     try:
                         # 使用混合渲染：CJK字符用CJK字体，ASCII字符用Helvetica
