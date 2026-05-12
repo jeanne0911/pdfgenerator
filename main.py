@@ -1918,7 +1918,13 @@ def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
     
     解决CJK字体中数字/字母显示过宽的问题（全角宽度）
     同时确保文字渲染模式为仅填充（mode=0），防止黑框
+    
+    使用 textObject 方式绘制以确保 Tr (text render mode) 操作符正确写入 PDF stream
     """
+    # 使用 textObject 以确保渲染模式 Tr 0 正确生效
+    text_obj = c.beginText()
+    text_obj.setTextRenderMode(0)  # 0 = 仅填充，不描边
+    
     cursor_x = x
     # 按连续的CJK / 非CJK字符分段
     segments = re.findall(
@@ -1929,21 +1935,21 @@ def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
     
     for seg in segments:
         if _has_cjk(seg) and font_registered:
-            c.setFont(cjk_font_name, font_size)
+            font_name = cjk_font_name
         else:
-            c.setFont('Helvetica', font_size)
+            font_name = 'Helvetica'
         
-        # 确保每段渲染前都设置正确的颜色和渲染模式，防止黑框
-        c.setFillColorRGB(0, 0, 0)       # 填充色：黑色
-        c.setStrokeColorRGB(0, 0, 0)     # 描边色也设黑色（以防万一）
-        c.setLineWidth(0)                 # 线宽为0
-        # 强制文字渲染模式为 0（仅填充，不描边）
-        c._textRenderMode = 0
+        # 设置位置和字体
+        text_obj.setTextOrigin(cursor_x, y)
+        text_obj.setFont(font_name, font_size)
+        text_obj.setFillColor('black')
+        text_obj.textOut(seg)
         
-        c.drawString(cursor_x, y, seg)
         # 计算当前段宽度，移动光标
-        seg_width = c.stringWidth(seg, c._fontname, font_size)
+        seg_width = c.stringWidth(seg, font_name, font_size)
         cursor_x += seg_width
+    
+    c.drawText(text_obj)
 
 
 def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes:
@@ -2085,26 +2091,27 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                     if x < 0:
                         x = 2
 
-                    # 设置填充色为黑色，禁用描边防止黑框
+                    # 设置填充色为黑色
                     c.setFillColorRGB(0, 0, 0)
                     c.setStrokeColorRGB(0, 0, 0)
                     c.setLineWidth(0)
-                    # 强制文字渲染模式为仅填充（mode=0），防止黑框
-                    c._textRenderMode = 0
                     
                     try:
                         # 使用混合渲染：CJK字符用CJK字体，ASCII字符用Helvetica
-                        # 解决CJK字体中数字/字母显示过宽的问题
+                        # 使用textObject方式确保渲染模式Tr=0正确写入PDF stream
                         _draw_mixed_text(c, x + 2, text_y, display_val, cjk_font_name, font_size, font_registered)
                     except Exception as draw_err:
                         print(f"绘制文字失败: {display_val}, 错误: {draw_err}")
-                        # 降级：直接用Helvetica绘制
+                        # 降级：直接用Helvetica绘制（通过textObject确保Tr=0）
                         try:
-                            c.setFont('Helvetica', font_size)
-                            c.setFillColorRGB(0, 0, 0)
-                            c._textRenderMode = 0
+                            text_obj = c.beginText()
+                            text_obj.setTextRenderMode(0)
+                            text_obj.setTextOrigin(x + 2, text_y)
+                            text_obj.setFont('Helvetica', font_size)
+                            text_obj.setFillColor('black')
                             safe_text = str(display_val)[:200]
-                            c.drawString(x + 2, text_y, safe_text)
+                            text_obj.textOut(safe_text)
+                            c.drawText(text_obj)
                         except Exception as safe_err:
                             print(f"安全绘制也失败: {safe_err}")
 
