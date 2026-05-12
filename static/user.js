@@ -349,9 +349,11 @@ async function generatePdf() {
         pdfDoc.registerFontkit(fontkit);
         // 使用完整的CJK字体（非子集），支持简繁体中文
         const fontUrls = [
-          'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf',
+          // 优先从本地服务器加载（秒加载）
+          '/static/fonts/NotoSansCJKsc-Regular.otf',
+          // CDN备用
           'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf',
-          'https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf',
+          'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf',
         ];
         let fontBytes = null;
         for (const url of fontUrls) {
