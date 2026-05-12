@@ -1917,6 +1917,7 @@ def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
     """混合渲染：CJK字符用CJK字体，ASCII字符用Helvetica
     
     解决CJK字体中数字/字母显示过宽的问题（全角宽度）
+    同时确保文字渲染模式为仅填充（mode=0），防止黑框
     """
     cursor_x = x
     # 按连续的CJK / 非CJK字符分段
@@ -1931,6 +1932,13 @@ def _draw_mixed_text(c, x, y, text, cjk_font_name, font_size, font_registered):
             c.setFont(cjk_font_name, font_size)
         else:
             c.setFont('Helvetica', font_size)
+        
+        # 确保每段渲染前都设置正确的颜色和渲染模式，防止黑框
+        c.setFillColorRGB(0, 0, 0)       # 填充色：黑色
+        c.setStrokeColorRGB(0, 0, 0)     # 描边色也设黑色（以防万一）
+        c.setLineWidth(0)                 # 线宽为0
+        # 强制文字渲染模式为 0（仅填充，不描边）
+        c._textRenderMode = 0
         
         c.drawString(cursor_x, y, seg)
         # 计算当前段宽度，移动光标
@@ -2079,8 +2087,10 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
 
                     # 设置填充色为黑色，禁用描边防止黑框
                     c.setFillColorRGB(0, 0, 0)
-                    c.setStrokeColorRGB(1, 1, 1)
+                    c.setStrokeColorRGB(0, 0, 0)
                     c.setLineWidth(0)
+                    # 强制文字渲染模式为仅填充（mode=0），防止黑框
+                    c._textRenderMode = 0
                     
                     try:
                         # 使用混合渲染：CJK字符用CJK字体，ASCII字符用Helvetica
@@ -2091,6 +2101,8 @@ def _fill_pdf_with_data(pdf_bytes: bytes, fields: list, row_data: dict) -> bytes
                         # 降级：直接用Helvetica绘制
                         try:
                             c.setFont('Helvetica', font_size)
+                            c.setFillColorRGB(0, 0, 0)
+                            c._textRenderMode = 0
                             safe_text = str(display_val)[:200]
                             c.drawString(x + 2, text_y, safe_text)
                         except Exception as safe_err:

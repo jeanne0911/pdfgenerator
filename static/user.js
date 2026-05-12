@@ -384,6 +384,24 @@ async function generatePdf() {
       font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     }
 
+    // 嵌入 Helvetica 用于 ASCII 字符（避免 CJK 字体中数字/字母全角过宽）
+    const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    // 混合渲染辅助函数：CJK字符用CJK字体，ASCII字符用Helvetica
+    const CJK_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f\u2600-\u26ff\u2700-\u27bf\u2500-\u257f\u2580-\u259f]+/;
+    function splitMixedSegments(text) {
+      // 按连续的 CJK / 非CJK 字符分段
+      const segments = [];
+      const re = /([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f\u2600-\u26ff\u2700-\u27bf\u2500-\u257f\u2580-\u259f\u2610\u2611\u2612\u2713\u2714\u2715\u2716\u2717\u2718\u2719\u271a\u2705\u274c\u274e\u2b55]+|[^\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u2e80-\u2eff\u3000-\u303f\ufe30-\ufe4f\u2600-\u26ff\u2700-\u27bf\u2500-\u257f\u2580-\u259f\u2610\u2611\u2612\u2713\u2714\u2715\u2716\u2717\u2718\u2719\u271a\u2705\u274c\u274e\u2b55]+)/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const seg = m[0];
+        const isCJK = CJK_REGEX.test(seg);
+        segments.push({ text: seg, isCJK });
+      }
+      return segments;
+    }
+
     const pages = pdfDoc.getPages();
 
     for (const f of state.templateFields) {
@@ -391,11 +409,10 @@ async function generatePdf() {
       const pageIdx = (f.page_num || 1) - 1;
       if (pageIdx >= pages.length) continue;
       const page = pages[pageIdx];
-      const { height: pageHeight } = page.getSize();
 
       const fontSize = f.font_size || 12;
-      const x = f.x + 2;
-      const y = f.y + (f.height - fontSize) / 2;
+      const baseX = f.x + 2;
+      const baseY = f.y + (f.height - fontSize) / 2;
 
       let displayValue = f._value;
       if (f._type === 'checkbox') {
@@ -403,21 +420,34 @@ async function generatePdf() {
       }
 
       try {
-        page.drawText(String(displayValue), {
-          x: x,
-          y: y,
-          size: fontSize,
-          font: font,
-          color: rgb(0, 0, 0),
-          maxWidth: f.width - 4,
-        });
-      } catch (drawErr) {
-        // Fallback: try with standard font
-        try {
-          const fallbackFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        if (useCustomFont && font) {
+          // 混合渲染：分段绘制
+          const segments = splitMixedSegments(String(displayValue));
+          let cursorX = baseX;
+          for (const seg of segments) {
+            const segFont = seg.isCJK ? font : helveticaFont;
+            const segWidth = segFont.widthOfTextAtSize(seg.text, fontSize);
+            page.drawText(seg.text, {
+              x: cursorX, y: baseY, size: fontSize,
+              font: segFont, color: rgb(0, 0, 0),
+            });
+            cursorX += segWidth;
+          }
+        } else {
+          // 无 CJK 字体，直接用 Helvetica
           page.drawText(String(displayValue), {
-            x: x, y: y, size: fontSize, font: fallbackFont,
-            color: rgb(0, 0, 0), maxWidth: f.width - 4,
+            x: baseX, y: baseY, size: fontSize,
+            font: helveticaFont, color: rgb(0, 0, 0),
+            maxWidth: f.width - 4,
+          });
+        }
+      } catch (drawErr) {
+        console.warn('混合渲染失败，降级到Helvetica:', drawErr);
+        try {
+          page.drawText(String(displayValue), {
+            x: baseX, y: baseY, size: fontSize,
+            font: helveticaFont, color: rgb(0, 0, 0),
+            maxWidth: f.width - 4,
           });
         } catch {}
       }
