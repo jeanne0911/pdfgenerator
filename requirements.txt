@@ -1,10 +1,20 @@
+# Web框架
 fastapi
-uvicorn
-pymysql
+uvicorn[standard]
 python-multipart
+pydantic
+
+# 数据库
+pymysql
+
+# PDF处理
 pypdf
 pdfplumber
-openpyxl
-pdf2image
 reportlab
+pdf2image
+
+# Excel处理
+openpyxl
+
+# 腾讯云COS存储
 cos-python-sdk-v5
